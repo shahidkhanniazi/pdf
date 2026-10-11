@@ -1,13 +1,13 @@
 name: Build Android APK
 
-# Builds the Something Historic app and attaches the APK to a GitHub Release,
-# so it can be downloaded straight to a phone. Runs on every push that changes
-# the app, and can also be started by hand from the Actions tab.
+# Builds the Something Historic app, opens it on an Android emulator to make
+# sure it starts without crashing, then attaches the APK to a GitHub Release
+# so it can be downloaded straight to a phone.
 on:
   push:
     paths:
       - "app/**"
-      - ".github/workflows/build-apk.yml"
+      - ".github/**"
   workflow_dispatch:
 
 permissions:
@@ -46,14 +46,54 @@ jobs:
           name: something-historic-apk
           path: app/build/something-historic.apk
 
+  smoke-test:
+    needs: apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: something-historic-apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Open the app on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: bash .github/scripts/smoke-test.sh something-historic.apk
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-test-screens
+          path: smoke/
+
+  release:
+    needs: [apk, smoke-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: something-historic-apk
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: app-build-${{ github.run_number }}
           name: Something Historic app (build ${{ github.run_number }})
           body: |
-            Android app built from ${{ github.sha }}.
+            Android app built from ${{ github.sha }} and checked on an Android emulator.
             Download **something-historic.apk** below and open it on your phone to install.
             Ads use Google's test ids until real AdMob ids are added in app/lib/config.dart.
-          files: app/build/something-historic.apk
+          files: something-historic.apk
           make_latest: true
